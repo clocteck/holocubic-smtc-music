@@ -51,9 +51,9 @@ local APP = {
   running = true,
   inflight = false,
   cover_inflight = false,
-  cover_ncm_id = 0,
+  cover_key = "",
   lyric_inflight = false,
-  lyric_ncm_id = "",
+  lyric_key = "",
   lyrics = {},
   lyric_idx = 1,
   last_seen = 0,
@@ -314,6 +314,43 @@ local function cover_path(ncm_id, ext)
   return APP_DIR .. "/cover_" .. safe_id(ncm_id) .. "." .. (ext or "jpg")
 end
 
+local function media_key(provider, id)
+  provider = text_or(provider, "")
+  id = text_or(id, "")
+  if provider == "" or id == "" then return "" end
+  return provider .. "_" .. id
+end
+
+local function status_lyric_ref(data)
+  if not data then return "", "", "" end
+  local provider = text_or(data.lyric_provider, "")
+  local id = text_or(data.lyric_id_text, "")
+  if id == "" then
+    id = text_or(data.ncm_id_text, "")
+    if id == "" then
+      local raw = tonumber(data.ncm_id) or 0
+      if raw > 0 then id = tostring(math.floor(raw)) end
+    end
+    if id ~= "" and provider == "" then provider = "netease" end
+  end
+  return provider, id, media_key(provider, id)
+end
+
+local function status_cover_ref(data)
+  if not data then return "", "", "" end
+  local provider = text_or(data.cover_provider, "")
+  local id = text_or(data.cover_id_text, "")
+  if id == "" then
+    id = text_or(data.ncm_id_text, "")
+    if id == "" then
+      local raw = tonumber(data.ncm_id) or 0
+      if raw > 0 then id = tostring(math.floor(raw)) end
+    end
+    if id ~= "" and provider == "" then provider = "netease" end
+  end
+  return provider, id, media_key(provider, id)
+end
+
 local function image_ext_from_bytes(body)
   if type(body) ~= "string" or #body < 4 then return "jpg" end
   local b1, b2, b3, b4 = body:byte(1, 4)
@@ -348,13 +385,13 @@ local function set_cover_visible(visible)
   end
 end
 
-local function show_cover_file(ncm_id)
+local function show_cover_file(key)
   if not APP.ui.cover_img or not lv_img_set_src then return false end
   local path = nil
   local exts = { APP.cover_ext, "png", "jpg" }
   for _, ext in ipairs(exts) do
     if ext and ext ~= "" then
-      local candidate = cover_path(ncm_id, ext)
+      local candidate = cover_path(key, ext)
       if not file or not file.exists or file.exists(candidate) then
         local actual = image_ext_from_file(candidate)
         if not actual or actual == ext then
@@ -368,7 +405,7 @@ local function show_cover_file(ncm_id)
   if not path then return false end
   local ok = pcall(function() lv_img_set_src(APP.ui.cover_img, sd_to_lv(path)) end)
   if ok then
-    APP.cover_ncm_id = ncm_id
+    APP.cover_key = key
     if lv_obj_set_size then pcall(function() lv_obj_set_size(APP.ui.cover_img, COVER_SIZE, COVER_SIZE) end) end
     if lv_img_set_zoom then pcall(function() lv_img_set_zoom(APP.ui.cover_img, 245) end) end
     if lv_img_set_antialias then pcall(function() lv_img_set_antialias(APP.ui.cover_img, true) end) end
@@ -380,23 +417,19 @@ end
 local function update_cover(data)
   if not data or not http or not http.get or not file then return end
   if not APP.ui.cover_img or not lv_img_set_src then return end
-  local ncm_id = text_or(data.ncm_id_text, "")
-  if ncm_id == "" then
-    local raw = tonumber(data.ncm_id) or 0
-    if raw > 0 then ncm_id = tostring(math.floor(raw)) end
-  end
-  if ncm_id == "" or text_or(data.cover_url, "") == "" then
+  local provider, id, key = status_cover_ref(data)
+  if key == "" or text_or(data.cover_url, "") == "" then
     set_cover_visible(false)
     return
   end
-  if APP.cover_ncm_id == ncm_id then
-    show_cover_file(ncm_id)
+  if APP.cover_key == key then
+    show_cover_file(key)
     return
   end
-  if show_cover_file(ncm_id) then return end
+  if show_cover_file(key) then return end
   if APP.cover_inflight then return end
   APP.cover_inflight = true
-  local url = base_url() .. "/cover?ncm_id=" .. tostring(ncm_id)
+  local url = base_url() .. "/cover?provider=" .. tostring(provider) .. "&id=" .. tostring(id)
   http.get(url, { timeout = tonumber(config.timeout_ms) or 5000 }, function(code, body)
     APP.cover_inflight = false
     if not APP.running then return end
@@ -405,15 +438,15 @@ local function update_cover(data)
       local ext = image_ext_from_bytes(body)
       APP.cover_ext = ext
       if file.putcontents then
-        ok = pcall(function() return file.putcontents(cover_path(ncm_id, ext), body) end)
+        ok = pcall(function() return file.putcontents(cover_path(key, ext), body) end)
       else
-        local fd = file.open and file.open(cover_path(ncm_id, ext), "w+")
+        local fd = file.open and file.open(cover_path(key, ext), "w+")
         if fd then
           ok = pcall(function() fd:write(body); fd:close() end)
         end
       end
       if ok then
-        show_cover_file(ncm_id)
+        show_cover_file(key)
       end
     end
   end)
@@ -515,26 +548,28 @@ function base_url()
   return "http://" .. tostring(config.host) .. ":" .. tostring(config.port)
 end
 
-local function fetch_lyrics(ncm_id)
-  ncm_id = text_or(ncm_id, "")
-  if ncm_id == "" or APP.lyric_inflight or not http or not http.get then return end
-  if APP.lyric_ncm_id == ncm_id and #(APP.lyrics or {}) > 0 then return end
+local function fetch_lyrics(provider, id)
+  provider = text_or(provider, "")
+  id = text_or(id, "")
+  local key = media_key(provider, id)
+  if key == "" or APP.lyric_inflight or not http or not http.get then return end
+  if APP.lyric_key == key and #(APP.lyrics or {}) > 0 then return end
   APP.lyric_inflight = true
-  local url = base_url() .. "/lyrics?ncm_id=" .. tostring(ncm_id)
+  local url = base_url() .. "/lyrics?provider=" .. tostring(provider) .. "&id=" .. tostring(id)
   http.get(url, { timeout = tonumber(config.timeout_ms) or 5000 }, function(code, body)
     APP.lyric_inflight = false
     if not APP.running then return end
     if code == 200 then
       local data = decode(body)
       if type(data) == "table" and type(data.lines) == "table" then
-        APP.lyric_ncm_id = ncm_id
+        APP.lyric_key = key
         APP.lyrics = data.lines
         APP.lyric_idx = 1
         render(false)
         return
       end
     end
-    APP.lyric_ncm_id = ncm_id
+    APP.lyric_key = key
     APP.lyrics = {}
     APP.lyric_idx = 1
     render(false)
@@ -557,15 +592,15 @@ local function poll_status()
         APP.sync_position_ms = tonumber(data.position_ms) or 0
         APP.sync_duration_ms = tonumber(data.duration_ms) or 0
         APP.playback_state = text_or(data.state, "unknown")
-        local ncm_id = text_or(data.ncm_id_text, "")
-        if ncm_id == "" then
-          local raw = tonumber(data.ncm_id) or 0
-          if raw > 0 then ncm_id = tostring(math.floor(raw)) end
-        end
-        if ncm_id ~= "" and ncm_id ~= APP.lyric_ncm_id then
+        local provider, id, key = status_lyric_ref(data)
+        if key ~= "" and key ~= APP.lyric_key then
           APP.lyrics = {}
           APP.lyric_idx = 1
-          fetch_lyrics(ncm_id)
+          fetch_lyrics(provider, id)
+        elseif key == "" and APP.lyric_key ~= "" then
+          APP.lyric_key = ""
+          APP.lyrics = {}
+          APP.lyric_idx = 1
         end
         render(true)
         return
