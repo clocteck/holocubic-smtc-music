@@ -1,0 +1,49 @@
+# SMTC Music
+
+HoloCubic app for displaying Windows SMTC media metadata and controlling playback through a small PC-side HTTP bridge.
+
+## Device App
+
+Copy `package/` to the device as:
+
+```text
+/sd/apps/smtc_music/app.info
+/sd/apps/smtc_music/main.lua
+/sd/apps/smtc_music/config.lua
+```
+
+Edit `config.lua` and set `config.host` to the Windows PC IP that will run the bridge. The default bridge port is `17865`.
+
+Controls:
+
+- `HOME` short press: play/pause
+- `HOME` long press: exit
+- `LEFT` / `RIGHT`: previous / next
+- `UP` / `DOWN`: seek +15s / -15s
+
+## PC Bridge
+
+Run on Windows:
+
+```powershell
+node .\bridge\smtc-bridge.js
+```
+
+Open `http://localhost:17865/` for health and endpoint info. The HoloCubic app reads `GET /status`, fetches full synced lyrics from `GET /lyrics?ncm_id=...`, downloads covers from `GET /cover?ncm_id=...`, and sends commands to `GET /control?action=...`.
+
+SMTC provides title, artist, album, playback status and timeline. InfLink-rs also writes the NetEase song ID into SMTC `Genres` as `NCM-{id}`. The bridge reads that ID and fetches synced lyrics from NetEase.
+
+- Lyrics work best when the current SMTC source is InfLink-rs.
+- `GET /status` includes `ncm_id`, playback state, timeline position, `lyric.current`, and `lyric.next`.
+- `GET /lyrics?ncm_id=...` returns the complete timed lyric array. The device app caches this and scrolls locally; `GET /status` is used only to correct playback time and state.
+- If `ncm_id` is `0`, the bridge still shows metadata and controls, but no automatic lyrics are available.
+
+## Font Build
+
+The packaged `font/smtc_cjk_16.bin` is generated as 1bpp for crisp text on the HoloCubic display. To rebuild it:
+
+```powershell
+.\font\build_smtc_cjk_font.ps1
+```
+
+Run `npm install` in `font/` first if `font/node_modules/` is absent.
