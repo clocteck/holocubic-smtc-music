@@ -13,6 +13,7 @@ end
 
 local config = dofile(APP_DIR .. "/config.lua")
 local ui_module = dofile(APP_DIR .. "/ui.lua")
+local web_module = dofile(APP_DIR .. "/web.lua")
 local JSON = rawget(_G, "sjson") or rawget(_G, "json")
 
 local APP = {
@@ -36,6 +37,7 @@ local APP = {
   ui = {},
   font = nil,
   view = nil,
+  web = nil,
 }
 _G.SMTC_MUSIC_APP = APP
 
@@ -171,6 +173,8 @@ local function poll_status()
   end)
 end
 
+APP.poll_status = poll_status
+
 local function control(action)
   if not http or not http.get then return end
   local url = base_url() .. tostring(config.control_path or "/control") .. "?action=" .. tostring(action)
@@ -218,9 +222,18 @@ function APP.stop(reason)
   if key and key.off then pcall(key.off) end
   if app and app.set_home_exit then pcall(function() app.set_home_exit(true) end) end
   if APP.view and APP.view.stop then APP.view:stop() end
+  if APP.web and APP.web.stop then APP.web:stop() end
 end
 
 APP.view:build()
+APP.web = web_module.new({
+  app = APP,
+  app_dir = APP_DIR,
+  config = config,
+  json = JSON,
+  text_or = text_or,
+})
+APP.web:start()
 bind_keys()
 poll_status()
 if tmr and tmr.create then

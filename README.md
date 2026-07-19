@@ -12,6 +12,7 @@ Copy `package/` to the device as:
 /sd/apps/smtc_music/main.png
 /sd/apps/smtc_music/main.lua
 /sd/apps/smtc_music/ui.lua
+/sd/apps/smtc_music/web.lua
 /sd/apps/smtc_music/config.lua
 ```
 
@@ -33,6 +34,8 @@ node .\bridge\smtc-bridge.js
 ```
 
 Open `http://localhost:17865/` for health and endpoint info. The HoloCubic app reads `GET /status`, fetches full synced lyrics from `GET /lyrics?provider=...&id=...`, downloads covers from `GET /cover?provider=...&id=...`, and sends commands to `GET /control?action=...`.
+
+When SMTC Music is running, launcher will expose the app's own WebUI route. Open the current app route shown by launcher to edit the device-side bridge host, port, poll interval, timeout, and endpoint paths. Saving the page rewrites `/sd/apps/smtc_music/config.lua` and the running app reconnects with the new values.
 
 SMTC provides title, artist, album, playback status and timeline. InfLink-rs also writes the NetEase song ID into SMTC `Genres` as `NCM-{id}`. The bridge reads that ID and fetches synced lyrics and cover art from NetEase.
 
