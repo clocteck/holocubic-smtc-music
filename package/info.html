@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="zh-CN" data-ui-lang="zh">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SMTC Music 信息</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f5f7fb;
+      --surface: #ffffff;
+      --text: #111827;
+      --muted: #64748b;
+      --line: #e2e8f0;
+      --blue: #2563eb;
+      --cyan: #0891b2;
+      --green: #16a34a;
+      --rose: #e11d48;
+      --soft: #eff6ff;
+      --shadow: rgba(15, 23, 42, .08);
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font: 15px/1.6 system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    }
+    main { width: min(960px, calc(100% - 28px)); margin: 22px auto; }
+    .hero, .panel {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      box-shadow: 0 14px 36px var(--shadow);
+    }
+    .hero {
+      display: grid;
+      grid-template-columns: 72px minmax(0, 1fr) auto;
+      gap: 16px;
+      align-items: center;
+      padding: 18px;
+    }
+    .icon {
+      width: 72px;
+      height: 72px;
+      border-radius: 16px;
+      object-fit: cover;
+      background: #0f172a;
+      box-shadow: 0 10px 24px rgba(15, 23, 42, .16);
+    }
+    .kicker {
+      margin: 0 0 4px;
+      color: var(--blue);
+      font-size: 13px;
+      font-weight: 800;
+    }
+    h1 { margin: 0; font-size: 32px; line-height: 1.1; letter-spacing: 0; }
+    .summary { margin: 8px 0 0; max-width: 650px; color: #475569; }
+    button {
+      min-width: 64px;
+      min-height: 42px;
+      border: 1px solid #bfdbfe;
+      border-radius: 8px;
+      background: var(--soft);
+      color: var(--blue);
+      font-weight: 800;
+      cursor: pointer;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.3fr) minmax(240px, .7fr);
+      gap: 12px;
+      margin-top: 12px;
+    }
+    .panel { padding: 16px; }
+    h2 { margin: 0 0 12px; font-size: 18px; line-height: 1.25; }
+    .features {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+    .features li {
+      min-height: 112px;
+      padding: 13px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfdff;
+    }
+    .mark {
+      display: inline-grid;
+      place-items: center;
+      width: 28px;
+      height: 28px;
+      margin-bottom: 8px;
+      border-radius: 8px;
+      color: #fff;
+      font-size: 12px;
+      font-weight: 850;
+    }
+    li:nth-child(1) .mark { background: var(--blue); }
+    li:nth-child(2) .mark { background: var(--cyan); }
+    li:nth-child(3) .mark { background: var(--green); }
+    li:nth-child(4) .mark { background: var(--rose); }
+    strong { display: block; font-size: 14px; line-height: 1.25; }
+    .features p { margin: 4px 0 0; color: var(--muted); font-size: 13px; line-height: 1.45; }
+    .facts { margin: 0; }
+    .facts div {
+      display: flex;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--line);
+    }
+    .facts div:last-child { border-bottom: 0; }
+    .facts dt { color: var(--muted); }
+    .facts dd { margin: 0; text-align: right; font-weight: 750; overflow-wrap: anywhere; }
+    .note {
+      margin: 12px 0 0;
+      padding: 12px;
+      border-radius: 8px;
+      background: #f0f9ff;
+      color: #075985;
+      font-size: 13px;
+    }
+    footer {
+      margin-top: 12px;
+      color: #8792a3;
+      font-size: 12px;
+      text-align: center;
+    }
+    a { color: inherit; font-weight: 750; text-decoration: none; }
+    [data-lang] { display: none; }
+    html[data-ui-lang="zh"] [data-lang="zh"],
+    html[data-ui-lang="en"] [data-lang="en"] { display: initial; }
+    @media (max-width: 720px) {
+      main { margin: 14px auto; }
+      .hero { grid-template-columns: 60px minmax(0, 1fr); padding: 14px; }
+      .icon { width: 60px; height: 60px; border-radius: 14px; }
+      .hero button { grid-column: 1 / -1; justify-self: end; }
+      h1 { font-size: 28px; }
+      .grid, .features { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="hero" aria-labelledby="title">
+      <img class="icon" src="main.png" width="72" height="72" alt="SMTC Music 应用图标">
+      <div>
+        <p class="kicker"><span data-lang="zh">Windows 媒体控制</span><span data-lang="en">Windows media control</span></p>
+        <h1 id="title">SMTC Music</h1>
+        <p class="summary">
+          <span data-lang="zh">在 HoloCubic 上显示 Windows 当前播放、专辑图、进度与同步歌词，并通过按键控制播放。</span>
+          <span data-lang="en">Shows Windows now-playing metadata, album art, progress, and synced lyrics on HoloCubic, with key-based playback controls.</span>
+        </p>
+      </div>
+      <button id="lang" type="button">English</button>
+    </section>
+
+    <div class="grid">
+      <section class="panel" aria-labelledby="feature-title">
+        <h2 id="feature-title"><span data-lang="zh">功能亮点</span><span data-lang="en">Highlights</span></h2>
+        <ul class="features">
+          <li><span class="mark">01</span><strong><span data-lang="zh">SMTC 状态显示</span><span data-lang="en">SMTC status</span></strong><p><span data-lang="zh">读取 Windows 当前媒体会话，展示歌名、歌手、播放状态和进度。</span><span data-lang="en">Reads the active Windows media session for title, artist, playback state, and timeline.</span></p></li>
+          <li><span class="mark">02</span><strong><span data-lang="zh">多来源歌词</span><span data-lang="en">Multi-source lyrics</span></strong><p><span data-lang="zh">已拆分网易云和 QQ 音乐适配，后续可继续添加新的音乐源。</span><span data-lang="en">NetEase and QQ Music adapters are separated so more music sources can be added later.</span></p></li>
+          <li><span class="mark">03</span><strong><span data-lang="zh">专辑图优化</span><span data-lang="en">Cover rendering</span></strong><p><span data-lang="zh">对远端封面做设备尺寸适配，避免 QQ 音乐封面重复、偏移或裁切异常。</span><span data-lang="en">Normalizes remote cover art for the device to avoid duplicated, shifted, or badly cropped QQ Music covers.</span></p></li>
+          <li><span class="mark">04</span><strong><span data-lang="zh">按键控制</span><span data-lang="en">Key controls</span></strong><p><span data-lang="zh">支持播放暂停、上一首、下一首、前进和后退 15 秒。</span><span data-lang="en">Supports play or pause, previous, next, and 15-second seek controls.</span></p></li>
+        </ul>
+      </section>
+
+      <aside class="panel" aria-labelledby="info-title">
+        <h2 id="info-title"><span data-lang="zh">应用信息</span><span data-lang="en">App info</span></h2>
+        <dl class="facts">
+          <div><dt><span data-lang="zh">版本</span><span data-lang="en">Version</span></dt><dd>0.1.0</dd></div>
+          <div><dt><span data-lang="zh">显示规格</span><span data-lang="en">Display</span></dt><dd>320 x 240</dd></div>
+          <div><dt><span data-lang="zh">设备端入口</span><span data-lang="en">Device entry</span></dt><dd>main.lua</dd></div>
+          <div><dt><span data-lang="zh">电脑端桥接</span><span data-lang="en">PC bridge</span></dt><dd>Node.js / HTTP</dd></div>
+          <div><dt><span data-lang="zh">默认端口</span><span data-lang="en">Default port</span></dt><dd>17865</dd></div>
+        </dl>
+        <p class="note">
+          <span data-lang="zh">使用前请在电脑端启动 bridge，并在 package/config.lua 中填写电脑 IP。</span>
+          <span data-lang="en">Start the bridge on the PC first, then set the PC IP in package/config.lua.</span>
+        </p>
+      </aside>
+    </div>
+
+    <footer>
+      SMTC Music · GPL-3.0 · <a href="https://github.com/clocteck/holocubic-apps" target="_blank" rel="noopener">GitHub</a>
+    </footer>
+  </main>
+  <script>
+    (function () {
+      var root = document.documentElement;
+      var button = document.getElementById("lang");
+      var image = document.querySelector(".icon");
+      function apply(lang) {
+        lang = lang === "en" ? "en" : "zh";
+        root.dataset.uiLang = lang;
+        root.lang = lang === "zh" ? "zh-CN" : "en";
+        document.title = lang === "zh" ? "SMTC Music 信息" : "SMTC Music Info";
+        button.textContent = lang === "zh" ? "English" : "中文";
+        image.alt = lang === "zh" ? "SMTC Music 应用图标" : "SMTC Music app icon";
+        try { localStorage.setItem("smtc-music-info-lang", lang); } catch (err) {}
+      }
+      button.addEventListener("click", function () {
+        apply(root.dataset.uiLang === "zh" ? "en" : "zh");
+      });
+      try { apply(localStorage.getItem("smtc-music-info-lang") || "zh"); }
+      catch (err) { apply("zh"); }
+    })();
+  </script>
+  <section class="controller-support" style="width:calc(100% - 28px);max-width:932px;margin:14px auto 0;padding:14px 16px;border:1px solid rgba(59,130,246,.22);border-left:4px solid #3b82f6;border-radius:12px;background:linear-gradient(135deg,rgba(239,246,255,.98),rgba(255,255,255,.98));box-shadow:0 8px 24px rgba(37,99,235,.08)"><h2 style="margin:0 0 6px;color:#1d4ed8;font-size:15px;line-height:1.35">蓝牙手柄控制</h2><p style="margin:0;color:#475569;font-size:13px;line-height:1.65">Select/Home：退出应用并返回桌面；左右：上一首/下一首；上下：快进/后退 15 秒。</p></section>
+</body>
+</html>

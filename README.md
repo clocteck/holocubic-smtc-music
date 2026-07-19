@@ -8,7 +8,10 @@ Copy `package/` to the device as:
 
 ```text
 /sd/apps/smtc_music/app.info
+/sd/apps/smtc_music/info.html
+/sd/apps/smtc_music/main.png
 /sd/apps/smtc_music/main.lua
+/sd/apps/smtc_music/ui.lua
 /sd/apps/smtc_music/config.lua
 ```
 
@@ -49,3 +52,4 @@ The packaged `font/smtc_cjk_16.bin` is generated as 1bpp for crisp text on the H
 ```
 
 Run `npm install` in `font/` first if `font/node_modules/` is absent.
+
