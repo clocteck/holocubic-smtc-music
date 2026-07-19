@@ -3,8 +3,14 @@
 
 const http = require("http");
 const https = require("https");
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
 const zlib = require("zlib");
 const { spawn } = require("child_process");
+const common = require("./sources/common");
+const createNeteaseSource = require("./sources/netease");
+const createQQMusicSource = require("./sources/qqmusic");
 
 const HOST = process.env.SMTC_BRIDGE_HOST || "0.0.0.0";
 const PORT = Number(process.env.SMTC_BRIDGE_PORT || 17865);
@@ -21,6 +27,8 @@ const searchCache = new Map();
 const metaCache = new Map();
 const qqSearchCache = new Map();
 const qqMetaCache = new Map();
+const sourceAdapters = [];
+const sourceByProvider = new Map();
 
 function psEncode(script) {
   return Buffer.from(script, "utf16le").toString("base64");
@@ -57,6 +65,51 @@ function runPowerShell(script, env = {}) {
       resolve(stdout.trim());
     });
   });
+}
+
+async function resizeCoverJpeg(buffer, size = 88) {
+  const tag = `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const input = path.join(os.tmpdir(), `smtc-cover-${tag}.img`);
+  const output = path.join(os.tmpdir(), `smtc-cover-${tag}.jpg`);
+  fs.writeFileSync(input, buffer);
+  const script = String.raw`
+$ErrorActionPreference = "Stop"
+Add-Type -AssemblyName System.Drawing
+$in = [string]$env:SMTC_COVER_INPUT
+$out = [string]$env:SMTC_COVER_OUTPUT
+$size = [int]$env:SMTC_COVER_SIZE
+$src = [System.Drawing.Image]::FromFile($in)
+$bmp = [System.Drawing.Bitmap]::new($size, $size, [System.Drawing.Imaging.PixelFormat]::Format24bppRgb)
+$g = [System.Drawing.Graphics]::FromImage($bmp)
+$g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+$g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
+$g.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+$g.Clear([System.Drawing.Color]::Black)
+$scale = [Math]::Max($size / $src.Width, $size / $src.Height)
+$w = [int][Math]::Ceiling($src.Width * $scale)
+$h = [int][Math]::Ceiling($src.Height * $scale)
+$x = [int][Math]::Floor(($size - $w) / 2)
+$y = [int][Math]::Floor(($size - $h) / 2)
+$g.DrawImage($src, $x, $y, $w, $h)
+$codec = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.MimeType -eq "image/jpeg" } | Select-Object -First 1
+$params = [System.Drawing.Imaging.EncoderParameters]::new(1)
+$params.Param[0] = [System.Drawing.Imaging.EncoderParameter]::new([System.Drawing.Imaging.Encoder]::Quality, [int64]90)
+$bmp.Save($out, $codec, $params)
+$g.Dispose()
+$bmp.Dispose()
+$src.Dispose()
+`;
+  try {
+    await runPowerShell(script, {
+      SMTC_COVER_INPUT: input,
+      SMTC_COVER_OUTPUT: output,
+      SMTC_COVER_SIZE: String(size),
+    });
+    return fs.readFileSync(output);
+  } finally {
+    try { fs.unlinkSync(input); } catch {}
+    try { fs.unlinkSync(output); } catch {}
+  }
 }
 
 const statusScript = String.raw`
@@ -191,48 +244,61 @@ switch ($action) {
 @{ ok = [bool]$ok; action = $action } | ConvertTo-Json -Compress
 `;
 
-function parseLrc(raw) {
-  const lines = [];
-  for (const line of String(raw || "").split(/\r?\n/)) {
-    const stamps = [...line.matchAll(/\[(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?\]/g)];
-    if (!stamps.length) continue;
-    const text = line.replace(/\[[^\]]+\]/g, "").trim();
-    if (!text) continue;
-    for (const stamp of stamps) {
-      const min = Number(stamp[1]) || 0;
-      const sec = Number(stamp[2]) || 0;
-      const frac = String(stamp[3] || "0").padEnd(3, "0").slice(0, 3);
-      lines.push({ at_ms: min * 60000 + sec * 1000 + Number(frac), text });
-    }
+const thumbnailScript = String.raw`
+$ErrorActionPreference = "Stop"
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+Add-Type -AssemblyName System.Runtime.WindowsRuntime
+$null = [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager, Windows.Media.Control, ContentType = WindowsRuntime]
+$null = [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionMediaProperties, Windows.Media.Control, ContentType = WindowsRuntime]
+$null = [Windows.Storage.Streams.IRandomAccessStreamWithContentType, Windows.Storage.Streams, ContentType = WindowsRuntime]
+$null = [Windows.Storage.Streams.DataReader, Windows.Storage.Streams, ContentType = WindowsRuntime]
+function Await-WinRt($op, [Type]$resultType) {
+  $method = [System.WindowsRuntimeSystemExtensions].GetMethods() |
+    Where-Object { $_.Name -eq "AsTask" -and $_.IsGenericMethodDefinition -and $_.GetParameters().Count -eq 1 } |
+    Select-Object -First 1
+  $task = $method.MakeGenericMethod($resultType).Invoke($null, @($op))
+  if (-not $task.Wait(4000)) { throw "WinRT timeout" }
+  return $task.Result
+}
+$manager = Await-WinRt ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager]::RequestAsync()) ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager])
+$currentSession = $manager.GetCurrentSession()
+$sessions = @($manager.GetSessions())
+$best = $null
+$bestScore = -999999
+$bestProps = $null
+foreach ($candidate in $sessions) {
+  $props = Await-WinRt ($candidate.TryGetMediaPropertiesAsync()) ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionMediaProperties])
+  $playback = $candidate.GetPlaybackInfo()
+  $timeline = $candidate.GetTimelineProperties()
+  $score = 0
+  if ([string]$playback.PlaybackStatus -eq "Playing") { $score += 3000 }
+  if ([object]::ReferenceEquals($candidate, $currentSession)) { $score += 1200 }
+  if ($props.Thumbnail) { $score += 600 }
+  if ([string]$props.Title -ne "") { $score += 20 }
+  if ($score -gt $bestScore) {
+    $best = $candidate
+    $bestScore = $score
+    $bestProps = $props
   }
-  return lines.sort((a, b) => a.at_ms - b.at_ms);
 }
-
-function mergeTranslation(primary, translation) {
-  if (!primary.length || !translation.length) return primary;
-  const translatedByTime = new Map(translation.map((line) => [line.at_ms, line.text]));
-  return primary.map((line) => {
-    const translated = translatedByTime.get(line.at_ms);
-    if (!translated || translated === line.text) return line;
-    return { ...line, text: `${line.text} / ${translated}` };
-  });
+if ($null -eq $bestProps -or $null -eq $bestProps.Thumbnail) {
+  @{ ok = $false; error = "thumbnail not found" } | ConvertTo-Json -Compress
+  exit 0
 }
-
-function normalizeText(value) {
-  return String(value || "")
-    .normalize("NFKC")
-    .toLowerCase()
-    .replace(/[()[\]{}【】（）。,，.!！?？'"]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function splitArtists(value) {
-  return normalizeText(value)
-    .split(/\s*(?:\/|&|,|，|;|；|\band\b|、)\s*/i)
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
+$stream = Await-WinRt ($bestProps.Thumbnail.OpenReadAsync()) ([Windows.Storage.Streams.IRandomAccessStreamWithContentType])
+$inputStream = [Windows.Storage.Streams.IInputStream]$stream
+$netStream = [System.IO.WindowsRuntimeStreamExtensions]::AsStreamForRead($inputStream)
+$memory = [System.IO.MemoryStream]::new()
+$netStream.CopyTo($memory)
+$bytes = $memory.ToArray()
+@{
+  ok = $true
+  content_type = [string]$stream.ContentType
+  bytes = [int]$bytes.Length
+  base64 = [Convert]::ToBase64String($bytes)
+} | ConvertTo-Json -Compress
+`;
 
 function isQQMusicSource(source) {
   return /qqmusic|tencent/i.test(String(source || ""));
@@ -402,289 +468,45 @@ async function fetchFirstBuffer(urls, options) {
   throw lastError || new Error("image not found");
 }
 
-function searchScore(song, track) {
-  const title = normalizeText(track.title);
-  const artist = normalizeText(track.artist);
-  const songName = normalizeText(song?.name);
-  const songArtists = Array.isArray(song?.artists)
-    ? song.artists.map((item) => normalizeText(item?.name)).filter(Boolean)
-    : [];
-  let score = 0;
-  if (songName === title) score += 80;
-  else if (songName.includes(title) || title.includes(songName)) score += 45;
-  for (const expected of splitArtists(artist)) {
-    if (songArtists.some((actual) => actual === expected)) score += 30;
-    else if (songArtists.some((actual) => actual.includes(expected) || expected.includes(actual))) score += 15;
-  }
-  if (Number(song?.duration) > 0 && Number(track.duration_ms) > 0) {
-    const delta = Math.abs(Number(song.duration) - Number(track.duration_ms));
-    if (delta < 2500) score += 15;
-    else if (delta < 8000) score += 8;
-  }
-  return score;
+function registerSource(source) {
+  sourceAdapters.push(source);
+  sourceByProvider.set(source.id, source);
+  for (const alias of source.aliases || []) sourceByProvider.set(alias, source);
+  return source;
 }
 
-function decodeHtml(value) {
-  return String(value || "")
-    .replace(/\\n/g, "\n")
-    .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code) || 0))
-    .replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCharCode(parseInt(code, 16) || 0))
-    .replace(/&apos;/g, "'")
-    .replace(/&quot;/g, '"')
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&amp;/g, "&");
+const neteaseSource = registerSource(createNeteaseSource({
+  common,
+  httpsJson,
+  lyricCache,
+  metaCache,
+  searchCache,
+  LYRIC_CACHE_MS,
+  META_CACHE_MS,
+  SEARCH_CACHE_MS,
+}));
+
+const qqMusicSource = registerSource(createQQMusicSource({
+  common,
+  lyricCache,
+  qqMetaCache,
+  qqSearchCache,
+  requestJson,
+  LYRIC_CACHE_MS,
+  META_CACHE_MS,
+  SEARCH_CACHE_MS,
+}));
+
+function sourceForStatus(status) {
+  return sourceAdapters.find((source) => source.matches(status)) || neteaseSource;
 }
 
-function maybeBase64Text(value) {
-  const text = String(value || "").trim();
-  if (!text || text.includes("[") || /[^\w+/=\s]/.test(text)) return text;
-  try {
-    const decoded = Buffer.from(text, "base64").toString("utf8");
-    return decoded.includes("[") ? decoded : text;
-  } catch {
-    return text;
-  }
-}
-
-function qqCoverUrl(albumMid, size = 92) {
-  albumMid = String(albumMid || "").trim();
-  if (!albumMid) return "";
-  return `https://y.qq.com/music/photo_new/T002R${size}x${size}M000${encodeURIComponent(albumMid)}.jpg?max_age=2592000`;
-}
-
-function normalizeQQSong(song) {
-  if (!song) return null;
-  const singer = Array.isArray(song.singer) ? song.singer : [];
-  const album = song.album || {};
-  const id = Number(song.songid || song.id || song.musicid) || 0;
-  const mid = String(song.songmid || song.mid || "").trim();
-  const albumMid = String(album.mid || song.albummid || "").trim();
-  const value = {
-    provider: "qqmusic",
-    id,
-    mid,
-    title: song.songname || song.name || "",
-    artist: singer.map((item) => item.name).filter(Boolean).join(" / "),
-    album: album.name || song.albumname || "",
-    duration_ms: (Number(song.interval) || 0) * 1000,
-    album_mid: albumMid,
-    cover_url: qqCoverUrl(albumMid),
-  };
-  if (value.id > 0) qqMetaCache.set(`id:${value.id}`, { at: Date.now(), value });
-  if (value.mid) qqMetaCache.set(`mid:${value.mid}`, { at: Date.now(), value });
-  if (value.album_mid) qqMetaCache.set(`album:${value.album_mid}`, { at: Date.now(), value });
-  return value;
-}
-
-async function searchQQMusicSong(track) {
-  const title = String(track.title || "").trim();
-  const artist = String(track.artist || "").trim();
-  if (!title) return null;
-  const key = normalizeText(`${title} ${artist}`);
-  const cached = qqSearchCache.get(key);
-  if (cached && Date.now() - cached.at < SEARCH_CACHE_MS) return cached.value;
-
-  const query = encodeURIComponent(`${title} ${artist}`.trim());
-  const endpoints = [
-    `https://c.y.qq.com/soso/fcgi-bin/client_search_cp?ct=24&qqmusic_ver=1298&new_json=1&remoteplace=txt.yqq.song&searchid=1&t=0&aggr=1&cr=1&catZhida=1&lossless=0&flag_qc=0&p=1&n=8&w=${query}&format=json&platform=yqq.json&needNewCode=0`,
-    `https://c.y.qq.com/soso/fcgi-bin/search_cp?g_tk=5381&uin=0&format=json&inCharset=utf-8&outCharset=utf-8&notice=0&platform=yqq&needNewCode=0&w=${query}&zhidaqu=1&catZhida=1&t=0&flag=1&ie=utf-8&sem=1&aggr=0&perpage=8&n=8&p=1&remoteplace=txt.mqq.all`,
-  ];
-  let songs = [];
-  for (const endpoint of endpoints) {
-    try {
-      const doc = await requestJson(endpoint, { referer: "https://y.qq.com/" });
-      songs = doc?.data?.song?.list || doc?.data?.list || [];
-      if (songs.length) break;
-    } catch {}
-  }
-  let best = null;
-  let bestScore = -1;
-  for (const rawSong of songs) {
-    const song = normalizeQQSong(rawSong);
-    if (!song) continue;
-    const score = searchScore({ name: song.title, artists: splitArtists(song.artist).map((name) => ({ name })), duration: song.duration_ms }, track);
-    if (score > bestScore) {
-      best = song;
-      bestScore = score;
-    }
-  }
-  const value = best && bestScore >= 45 ? best : null;
-  qqSearchCache.set(key, { at: Date.now(), value });
-  return value;
-}
-
-async function searchNeteaseSong(track) {
-  const title = String(track.title || "").trim();
-  const artist = String(track.artist || "").trim();
-  if (!title) return 0;
-  const key = normalizeText(`${title} ${artist}`);
-  const cached = searchCache.get(key);
-  if (cached && Date.now() - cached.at < SEARCH_CACHE_MS) return cached.id;
-
-  const query = encodeURIComponent(`${title} ${artist}`.trim());
-  const url = `https://music.163.com/api/search/get/web?csrf_token=&type=1&limit=8&s=${query}`;
-  const doc = await httpsJson(url);
-  const songs = doc?.result?.songs || [];
-  let best = null;
-  let bestScore = -1;
-  for (const song of songs) {
-    const score = searchScore(song, track);
-    if (score > bestScore) {
-      best = song;
-      bestScore = score;
-    }
-  }
-  const id = best && bestScore >= 45 ? Number(best.id) || 0 : 0;
-  searchCache.set(key, { at: Date.now(), id });
-  return id;
-}
-
-async function fetchNeteaseLyrics(ncmId) {
-  ncmId = Number(ncmId) || 0;
-  if (ncmId <= 0) return { source: "", lines: [] };
-
-  const cached = lyricCache.get(ncmId);
-  if (cached && Date.now() - cached.at < LYRIC_CACHE_MS) return cached.value;
-
-  const url = `https://music.163.com/api/song/lyric?id=${ncmId}&lv=-1&kv=-1&tv=-1`;
-  const doc = await httpsJson(url);
-  const primary = parseLrc(doc?.lrc?.lyric || "");
-  const translated = parseLrc(doc?.tlyric?.lyric || "");
-  const lines = mergeTranslation(primary, translated);
-  const value = { source: `netease:${ncmId}`, translation_line_count: translated.length, lines };
-  lyricCache.set(ncmId, { at: Date.now(), value });
-  return value;
-}
-
-async function fetchNeteaseMeta(ncmId) {
-  ncmId = Number(ncmId) || 0;
-  if (ncmId <= 0) return {};
-
-  const cached = metaCache.get(ncmId);
-  if (cached && Date.now() - cached.at < META_CACHE_MS) return cached.value;
-
-  const url = `https://music.163.com/api/song/detail/?ids=%5B${ncmId}%5D`;
-  const doc = await httpsJson(url);
-  const song = Array.isArray(doc?.songs) ? doc.songs[0] : null;
-  const album = song?.album || song?.al || {};
-  const coverUrl = album.picUrl || album.pic || "";
-  const value = {
-    id: ncmId,
-    title: song?.name || "",
-    album: album.name || "",
-    duration_ms: Number(song?.duration || song?.dt) || 0,
-    cover_url: coverUrl ? `${coverUrl}?param=92y92&type=jpg` : "",
-  };
-  metaCache.set(ncmId, { at: Date.now(), value });
-  return value;
-}
-
-async function fetchQQLyrics(track) {
-  const songId = Number(track?.id) || 0;
-  let songMid = String(track?.mid || "").trim();
-  if (!songMid && songId > 0) {
-    const cachedMeta = qqMetaCache.get(`id:${songId}`);
-    if (cachedMeta && Date.now() - cachedMeta.at < META_CACHE_MS) songMid = cachedMeta.value.mid || "";
-  }
-  if (songId <= 0 && !songMid) return { source: "", lines: [] };
-
-  const cacheKey = `qq:${songId || songMid}`;
-  const cached = lyricCache.get(cacheKey);
-  if (cached && Date.now() - cached.at < LYRIC_CACHE_MS) return cached.value;
-
-  const params = [
-    "nobase64=1",
-    "format=json",
-    "inCharset=utf8",
-    "outCharset=utf-8",
-    "notice=0",
-    "platform=yqq.json",
-    "needNewCode=0",
-    "g_tk=5381",
-    "hostUin=0",
-    "loginUin=0",
-    "trans=1",
-    `pcachetime=${Date.now()}`,
-  ].join("&");
-  const idParts = [];
-  if (songId > 0 && songMid) idParts.push(`musicid=${songId}&songmid=${encodeURIComponent(songMid)}`);
-  if (songId > 0) idParts.push(`musicid=${songId}`);
-  if (songMid) idParts.push(`songmid=${encodeURIComponent(songMid)}`);
-  const endpoints = idParts.flatMap((idPart) => [
-    `https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg?${params}&${idPart}`,
-    `https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric.fcg?${params}&${idPart}`,
-  ]);
-  const referer = "https://y.qq.com/n/ryqq/player";
-  for (const endpoint of endpoints) {
-    try {
-      const doc = await requestJson(endpoint, {
-        referer,
-        headers: {
-          origin: "https://y.qq.com",
-        },
-      });
-      const lyricRaw = decodeHtml(maybeBase64Text(doc?.lyric || ""));
-      const transRaw = decodeHtml(maybeBase64Text(doc?.trans || doc?.translate || ""));
-      const primary = parseLrc(lyricRaw);
-      const translated = parseLrc(transRaw);
-      const lines = mergeTranslation(primary, translated);
-      if (lines.length) {
-        const value = { source: `qqmusic:${songId || songMid}`, translation_line_count: translated.length, lines };
-        lyricCache.set(cacheKey, { at: Date.now(), value });
-        return value;
-      }
-    } catch {}
-  }
-
-  const value = { source: "", translation_line_count: 0, lines: [] };
-  lyricCache.set(cacheKey, { at: Date.now(), value });
-  return value;
-}
-
-async function findNeteaseLyrics(status) {
-  let ncmId = Number(status.ncm_id) || 0;
-  let sourceHint = "smtc";
-  if (ncmId <= 0) {
-    ncmId = await searchNeteaseSong(status);
-    sourceHint = "search";
-    status.ncm_id = ncmId;
-  }
-  const found = await fetchNeteaseLyrics(ncmId);
-  return {
-    ...found,
-    source: found.source ? `${found.source}:${sourceHint}` : "",
-  };
+function sourceForProvider(provider) {
+  return sourceByProvider.get(String(provider || "").toLowerCase()) || neteaseSource;
 }
 
 async function resolveMedia(status) {
-  if (isQQMusicSource(status.source)) {
-    const qq = await searchQQMusicSong(status);
-    if (!qq) {
-      status.lyric_provider = "qqmusic";
-      status.lyric_id_text = "";
-      status.cover_provider = "qqmusic";
-      status.cover_id_text = "";
-      return { found: { source: "", lines: [] }, meta: {} };
-    }
-    status.qq_song_id = qq.id;
-    status.qq_song_mid = qq.mid;
-    status.qq_album_mid = qq.album_mid;
-    status.lyric_provider = "qqmusic";
-    status.lyric_id_text = qq.id ? String(qq.id) : qq.mid;
-    status.cover_provider = "qqmusic";
-    status.cover_id_text = qq.album_mid || "";
-    const found = await fetchQQLyrics(qq);
-    return { found, meta: qq };
-  }
-
-  const found = await findNeteaseLyrics(status);
-  const meta = await fetchNeteaseMeta(status.ncm_id);
-  status.lyric_provider = "netease";
-  status.lyric_id_text = status.ncm_id ? String(status.ncm_id) : "";
-  status.cover_provider = "netease";
-  status.cover_id_text = status.ncm_id ? String(status.ncm_id) : "";
-  return { found, meta };
+  return sourceForStatus(status).resolve(status);
 }
 
 function lyricAt(lines, positionMs) {
@@ -793,15 +615,14 @@ const server = http.createServer(async (req, res) => {
         songMid = String(status.qq_song_mid || "");
       }
       let found;
-      if (provider === "qq" || provider === "qqmusic") {
-        found = await fetchQQLyrics({ id: Number(idText) || 0, mid: songMid });
-        provider = "qqmusic";
+      const source = sourceForProvider(provider);
+      if (source.id === "qqmusic") {
+        found = await source.fetchLyrics({ id: Number(idText) || 0, mid: songMid });
       } else {
-        const ncmId = Number(idText) || 0;
-        found = await fetchNeteaseLyrics(ncmId);
-        provider = "netease";
-        idText = ncmId ? String(ncmId) : "";
+        idText = String(Number(idText) || 0);
+        found = await source.fetchLyrics({ id: idText });
       }
+      provider = source.id;
       sendJson(res, 200, {
         ok: true,
         provider,
@@ -825,14 +646,30 @@ const server = http.createServer(async (req, res) => {
       if (!provider && url.searchParams.has("ncm_id")) provider = "netease";
       let coverUrl = "";
       let referer = "https://music.163.com/";
-      if (provider === "qq" || provider === "qqmusic") {
-        provider = "qqmusic";
-        coverUrl = [92, 150, 300, 500].map((size) => qqCoverUrl(idText, size));
+      let normalizeToDeviceSize = false;
+      const source = sourceForProvider(provider);
+      if (source.id === "qqmusic") {
+        coverUrl = source.coverCandidates(idText, provider);
         referer = "https://y.qq.com/";
+        normalizeToDeviceSize = source.normalizeCover;
+      } else if (provider === "smtc") {
+        const raw = await runPowerShell(thumbnailScript);
+        const thumb = JSON.parse(raw || "{}");
+        if (!thumb.ok || !thumb.base64) {
+          sendJson(res, 404, { ok: false, error: thumb.error || "thumbnail not found" });
+          return;
+        }
+        const body = Buffer.from(thumb.base64, "base64");
+        res.writeHead(200, {
+          "content-type": thumb.content_type || "image/jpeg",
+          "content-length": body.length,
+          "cache-control": "no-store",
+          "access-control-allow-origin": "*",
+        });
+        res.end(body);
+        return;
       } else {
-        const ncmId = Number(idText) || 0;
-        const meta = await fetchNeteaseMeta(ncmId);
-        coverUrl = meta.cover_url || "";
+        coverUrl = await source.coverCandidates(idText);
       }
       if (!coverUrl || (Array.isArray(coverUrl) && !coverUrl.length)) {
         sendJson(res, 404, { ok: false, error: "cover not found" });
@@ -841,6 +678,10 @@ const server = http.createServer(async (req, res) => {
       const image = Array.isArray(coverUrl)
         ? await fetchFirstBuffer(coverUrl, { referer })
         : await fetchBuffer(coverUrl, { referer });
+      if (normalizeToDeviceSize) {
+        image.body = await resizeCoverJpeg(image.body, 88);
+        image.contentType = "image/jpeg";
+      }
       res.writeHead(200, {
         "content-type": image.contentType,
         "content-length": image.body.length,
