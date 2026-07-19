@@ -29,14 +29,16 @@ Run on Windows:
 node .\bridge\smtc-bridge.js
 ```
 
-Open `http://localhost:17865/` for health and endpoint info. The HoloCubic app reads `GET /status`, fetches full synced lyrics from `GET /lyrics?ncm_id=...`, downloads covers from `GET /cover?ncm_id=...`, and sends commands to `GET /control?action=...`.
+Open `http://localhost:17865/` for health and endpoint info. The HoloCubic app reads `GET /status`, fetches full synced lyrics from `GET /lyrics?provider=...&id=...`, downloads covers from `GET /cover?provider=...&id=...`, and sends commands to `GET /control?action=...`.
 
-SMTC provides title, artist, album, playback status and timeline. InfLink-rs also writes the NetEase song ID into SMTC `Genres` as `NCM-{id}`. The bridge reads that ID and fetches synced lyrics from NetEase.
+SMTC provides title, artist, album, playback status and timeline. InfLink-rs also writes the NetEase song ID into SMTC `Genres` as `NCM-{id}`. The bridge reads that ID and fetches synced lyrics and cover art from NetEase.
 
-- Lyrics work best when the current SMTC source is InfLink-rs.
-- `GET /status` includes `ncm_id`, playback state, timeline position, `lyric.current`, and `lyric.next`.
-- `GET /lyrics?ncm_id=...` returns the complete timed lyric array. The device app caches this and scrolls locally; `GET /status` is used only to correct playback time and state.
-- If `ncm_id` is `0`, the bridge still shows metadata and controls, but no automatic lyrics are available.
+QQ Music is handled as its own source: the bridge normalizes QQ Music SMTC title/artist fields, matches the track through QQ Music's web API, then fetches QQ Music lyrics and album art. QQ tracks do not fall back to NetEase search.
+
+- Lyrics work best when the current SMTC source is InfLink-rs or QQ Music.
+- `GET /status` includes provider/id fields, playback state, timeline position, `lyric.current`, and `lyric.next`.
+- `GET /lyrics?provider=...&id=...` returns the complete timed lyric array. The device app caches this and scrolls locally; `GET /status` is used only to correct playback time and state.
+- If no provider-specific match is found, the bridge still shows metadata and controls, but lyrics and cover art may be unavailable.
 
 ## Font Build
 
