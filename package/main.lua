@@ -30,6 +30,7 @@ local LYRIC_ACTIVE_LINE_H = 18
 local LYRIC_SMALL_LINE_H = 14
 local LYRIC_LINE_SPACE = 4
 local LYRIC_OFFSETS = { -2, -1, 0, 1, 2 }
+local INFO_SCROLL_SPEED = 12
 
 local C = {
   bg = 0x000000,
@@ -108,6 +109,13 @@ local function label(parent, x, y, w, font, color, align, long_mode)
   if align and lv_obj_set_style_text_align then lv_obj_set_style_text_align(id, align, MAIN) end
   if lv_label_set_long_mode then lv_label_set_long_mode(id, long_mode or LONG_CLIP) end
   return id
+end
+
+local function set_scroll_speed(id, speed)
+  if not id then return end
+  speed = tonumber(speed) or INFO_SCROLL_SPEED
+  if lv_label_set_anim_speed then pcall(function() lv_label_set_anim_speed(id, speed) end) end
+  if lv_obj_set_style_anim_speed then pcall(function() lv_obj_set_style_anim_speed(id, speed, MAIN) end) end
 end
 
 local function load_font()
@@ -321,6 +329,12 @@ local function media_key(provider, id)
   return provider .. "_" .. id
 end
 
+local function cover_cache_key(provider, id)
+  local key = media_key(provider, id)
+  if key == "" then return "" end
+  return key .. "_fit92"
+end
+
 local function status_lyric_ref(data)
   if not data then return "", "", "" end
   local provider = text_or(data.lyric_provider, "")
@@ -348,7 +362,7 @@ local function status_cover_ref(data)
     end
     if id ~= "" and provider == "" then provider = "netease" end
   end
-  return provider, id, media_key(provider, id)
+  return provider, id, cover_cache_key(provider, id)
 end
 
 local function image_ext_from_bytes(body)
@@ -359,11 +373,52 @@ local function image_ext_from_bytes(body)
   return "jpg"
 end
 
-local function image_ext_from_file(path)
+local function be16(body, pos)
+  local a, b = body:byte(pos, pos + 1)
+  if not a or not b then return 0 end
+  return a * 256 + b
+end
+
+local function be32(body, pos)
+  local a, b, c, d = body:byte(pos, pos + 3)
+  if not a or not b or not c or not d then return 0 end
+  return ((a * 256 + b) * 256 + c) * 256 + d
+end
+
+local function image_info_from_bytes(body)
+  local ext = image_ext_from_bytes(body)
+  local w, h = 0, 0
+  if ext == "png" and #body >= 24 then
+    w, h = be32(body, 17), be32(body, 21)
+  elseif ext == "jpg" and #body > 12 then
+    local pos = 3
+    while pos + 8 <= #body do
+      if body:byte(pos) ~= 0xFF then break end
+      local marker = body:byte(pos + 1) or 0
+      local len = be16(body, pos + 2)
+      if len < 2 then break end
+      if marker >= 0xC0 and marker <= 0xC3 then
+        h, w = be16(body, pos + 5), be16(body, pos + 7)
+        break
+      end
+      pos = pos + 2 + len
+    end
+  end
+  return ext, w, h
+end
+
+local function image_info_from_file(path)
   if not file or not file.getcontents or not path then return nil end
   local ok, body = pcall(function() return file.getcontents(path) end)
-  if ok and type(body) == "string" and #body >= 4 then return image_ext_from_bytes(body) end
+  if ok and type(body) == "string" and #body >= 4 then return image_info_from_bytes(body) end
   return nil
+end
+
+local function cover_zoom_for(w, h)
+  w, h = tonumber(w) or 0, tonumber(h) or 0
+  local side = math.max(w, h)
+  if side <= 0 then return 245 end
+  return math.max(1, math.min(256, math.floor(COVER_SIZE * 256 / side)))
 end
 
 local function sd_to_lv(path)
@@ -393,10 +448,11 @@ local function show_cover_file(key)
     if ext and ext ~= "" then
       local candidate = cover_path(key, ext)
       if not file or not file.exists or file.exists(candidate) then
-        local actual = image_ext_from_file(candidate)
+        local actual, w, h = image_info_from_file(candidate)
         if not actual or actual == ext then
           path = candidate
           APP.cover_ext = ext
+          APP.cover_zoom = cover_zoom_for(w, h)
           break
         end
       end
@@ -407,7 +463,7 @@ local function show_cover_file(key)
   if ok then
     APP.cover_key = key
     if lv_obj_set_size then pcall(function() lv_obj_set_size(APP.ui.cover_img, COVER_SIZE, COVER_SIZE) end) end
-    if lv_img_set_zoom then pcall(function() lv_img_set_zoom(APP.ui.cover_img, 245) end) end
+    if lv_img_set_zoom then pcall(function() lv_img_set_zoom(APP.ui.cover_img, APP.cover_zoom or 245) end) end
     if lv_img_set_antialias then pcall(function() lv_img_set_antialias(APP.ui.cover_img, true) end) end
     set_cover_visible(true)
   end
@@ -435,8 +491,9 @@ local function update_cover(data)
     if not APP.running then return end
     if code == 200 and type(body) == "string" and #body > 128 then
       local ok = false
-      local ext = image_ext_from_bytes(body)
+      local ext, w, h = image_info_from_bytes(body)
       APP.cover_ext = ext
+      APP.cover_zoom = cover_zoom_for(w, h)
       if file.putcontents then
         ok = pcall(function() return file.putcontents(cover_path(key, ext), body) end)
       else
@@ -461,6 +518,7 @@ local function set_lyric_slot(slot, text, y, active, opa)
   pcall(function() lv_obj_set_style_text_font(slot, APP.font or FONT_16, MAIN) end)
   pcall(function() lv_obj_set_style_text_color(slot, active and C.text or C.dim, MAIN) end)
   if lv_obj_set_style_text_opa then pcall(function() lv_obj_set_style_text_opa(slot, opa or 255, MAIN) end) end
+  if lv_label_set_long_mode then pcall(function() lv_label_set_long_mode(slot, LONG_CLIP) end) end
   set_text(slot, wrapped)
 end
 
@@ -657,6 +715,9 @@ local function build_ui()
   APP.ui.title = label(card, LEFT_X, 132, 104, APP.font or FONT_20, C.text, nil, LONG_SCROLL)
   APP.ui.artist = label(card, LEFT_X, 162, 104, APP.font or FONT_16, C.sub, nil, LONG_SCROLL)
   APP.ui.album = label(card, LEFT_X, 188, 104, APP.font or FONT_12, C.dim, nil, LONG_SCROLL)
+  set_scroll_speed(APP.ui.title, INFO_SCROLL_SPEED)
+  set_scroll_speed(APP.ui.artist, INFO_SCROLL_SPEED)
+  set_scroll_speed(APP.ui.album, INFO_SCROLL_SPEED)
 
   local bar_bg = lv_obj_create(card)
   APP.progress_w = 320

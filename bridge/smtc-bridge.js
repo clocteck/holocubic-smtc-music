@@ -390,6 +390,18 @@ function fetchBuffer(url, options = {}, redirects = 3) {
   });
 }
 
+async function fetchFirstBuffer(urls, options) {
+  let lastError = null;
+  for (const url of urls) {
+    try {
+      return await fetchBuffer(url, options);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error("image not found");
+}
+
 function searchScore(song, track) {
   const title = normalizeText(track.title);
   const artist = normalizeText(track.artist);
@@ -435,7 +447,7 @@ function maybeBase64Text(value) {
   }
 }
 
-function qqCoverUrl(albumMid, size = 300) {
+function qqCoverUrl(albumMid, size = 92) {
   albumMid = String(albumMid || "").trim();
   if (!albumMid) return "";
   return `https://y.qq.com/music/photo_new/T002R${size}x${size}M000${encodeURIComponent(albumMid)}.jpg?max_age=2592000`;
@@ -540,7 +552,7 @@ async function fetchNeteaseLyrics(ncmId) {
   const primary = parseLrc(doc?.lrc?.lyric || "");
   const translated = parseLrc(doc?.tlyric?.lyric || "");
   const lines = mergeTranslation(primary, translated);
-  const value = { source: `netease:${ncmId}`, lines };
+  const value = { source: `netease:${ncmId}`, translation_line_count: translated.length, lines };
   lyricCache.set(ncmId, { at: Date.now(), value });
   return value;
 }
@@ -570,7 +582,11 @@ async function fetchNeteaseMeta(ncmId) {
 
 async function fetchQQLyrics(track) {
   const songId = Number(track?.id) || 0;
-  const songMid = String(track?.mid || "").trim();
+  let songMid = String(track?.mid || "").trim();
+  if (!songMid && songId > 0) {
+    const cachedMeta = qqMetaCache.get(`id:${songId}`);
+    if (cachedMeta && Date.now() - cachedMeta.at < META_CACHE_MS) songMid = cachedMeta.value.mid || "";
+  }
   if (songId <= 0 && !songMid) return { source: "", lines: [] };
 
   const cacheKey = `qq:${songId || songMid}`;
@@ -583,17 +599,23 @@ async function fetchQQLyrics(track) {
     "inCharset=utf8",
     "outCharset=utf-8",
     "notice=0",
-    "platform=yqq",
+    "platform=yqq.json",
     "needNewCode=0",
+    "g_tk=5381",
+    "hostUin=0",
+    "loginUin=0",
+    "trans=1",
+    `pcachetime=${Date.now()}`,
   ].join("&");
-  const queryIds = [];
-  if (songId > 0) queryIds.push(`musicid=${songId}`);
-  if (songMid) queryIds.push(`songmid=${encodeURIComponent(songMid)}`);
-  const endpoints = queryIds.flatMap((idPart) => [
+  const idParts = [];
+  if (songId > 0 && songMid) idParts.push(`musicid=${songId}&songmid=${encodeURIComponent(songMid)}`);
+  if (songId > 0) idParts.push(`musicid=${songId}`);
+  if (songMid) idParts.push(`songmid=${encodeURIComponent(songMid)}`);
+  const endpoints = idParts.flatMap((idPart) => [
     `https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg?${params}&${idPart}`,
     `https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric.fcg?${params}&${idPart}`,
   ]);
-  const referer = songMid ? `https://y.qq.com/n/ryqq/songDetail/${encodeURIComponent(songMid)}` : "https://y.qq.com/";
+  const referer = "https://y.qq.com/n/ryqq/player";
   for (const endpoint of endpoints) {
     try {
       const doc = await requestJson(endpoint, {
@@ -608,14 +630,14 @@ async function fetchQQLyrics(track) {
       const translated = parseLrc(transRaw);
       const lines = mergeTranslation(primary, translated);
       if (lines.length) {
-        const value = { source: `qqmusic:${songId || songMid}`, lines };
+        const value = { source: `qqmusic:${songId || songMid}`, translation_line_count: translated.length, lines };
         lyricCache.set(cacheKey, { at: Date.now(), value });
         return value;
       }
     } catch {}
   }
 
-  const value = { source: "", lines: [] };
+  const value = { source: "", translation_line_count: 0, lines: [] };
   lyricCache.set(cacheKey, { at: Date.now(), value });
   return value;
 }
@@ -694,6 +716,7 @@ async function smtcStatus(force = false) {
       status.ncm_id_text = status.ncm_id ? String(status.ncm_id) : "";
       status.cover_url = meta.cover_url || "";
       status.lyrics_available = found.lines.length > 0;
+      status.translation_line_count = found.translation_line_count || 0;
       status.lyric_source = found.source;
       status.lyric = lyricAt(found.lines, Number(status.position_ms) || 0);
     } else {
@@ -786,6 +809,7 @@ const server = http.createServer(async (req, res) => {
         ncm_id: provider === "netease" ? Number(idText) || 0 : 0,
         ncm_id_text: provider === "netease" ? idText : "",
         source: found.source,
+        translation_line_count: found.translation_line_count || 0,
         line_count: found.lines.length,
         lines: found.lines,
       });
@@ -803,18 +827,20 @@ const server = http.createServer(async (req, res) => {
       let referer = "https://music.163.com/";
       if (provider === "qq" || provider === "qqmusic") {
         provider = "qqmusic";
-        coverUrl = qqCoverUrl(idText);
+        coverUrl = [92, 150, 300, 500].map((size) => qqCoverUrl(idText, size));
         referer = "https://y.qq.com/";
       } else {
         const ncmId = Number(idText) || 0;
         const meta = await fetchNeteaseMeta(ncmId);
         coverUrl = meta.cover_url || "";
       }
-      if (!coverUrl) {
+      if (!coverUrl || (Array.isArray(coverUrl) && !coverUrl.length)) {
         sendJson(res, 404, { ok: false, error: "cover not found" });
         return;
       }
-      const image = await fetchBuffer(coverUrl, { referer });
+      const image = Array.isArray(coverUrl)
+        ? await fetchFirstBuffer(coverUrl, { referer })
+        : await fetchBuffer(coverUrl, { referer });
       res.writeHead(200, {
         "content-type": image.contentType,
         "content-length": image.body.length,
