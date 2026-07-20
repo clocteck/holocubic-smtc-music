@@ -14,9 +14,10 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$root = Resolve-Path (Join-Path $scriptDir '..\..')
-$toolsDir = Join-Path $root 'tools'
-$outDir = Join-Path $root 'smtc_music\package\font'
+$repoRoot = Resolve-Path (Join-Path $scriptDir '..')
+$workspaceRoot = Resolve-Path (Join-Path $repoRoot '..')
+$toolsDir = Join-Path $workspaceRoot 'tools'
+$outDir = Join-Path $repoRoot 'package\font'
 $outPath = Join-Path $outDir 'smtc_cjk_16.bin'
 
 if ([string]::IsNullOrWhiteSpace($NodePath)) {
@@ -27,7 +28,7 @@ if ([string]::IsNullOrWhiteSpace($NodePath)) {
 if ([string]::IsNullOrWhiteSpace($ConverterPath)) {
   $candidates = @(
     (Join-Path $scriptDir 'node_modules\lv_font_conv\lv_font_conv.js'),
-    (Join-Path $root 'node_modules\lv_font_conv\lv_font_conv.js')
+    (Join-Path $repoRoot 'node_modules\lv_font_conv\lv_font_conv.js')
   )
   foreach ($candidate in $candidates) {
     if (Test-Path -LiteralPath $candidate) {

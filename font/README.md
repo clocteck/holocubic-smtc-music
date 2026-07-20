@@ -1,9 +1,9 @@
 # SMTC Music Font Build
 
-`smtc_music` can display lyrics and metadata in English, Chinese, Japanese, and Korean by loading:
+`holocubic-smtc-music` can display lyrics and metadata in English, Chinese, Japanese, and Korean by loading:
 
 ```text
-/sd/apps/smtc_music/font/smtc_cjk_16.bin
+/sd/apps/holocubic-smtc-music/font/smtc_cjk_16.bin
 ```
 
 The app falls back to `xiaozhi_common3500_16.bin` if the compiled font is absent.
@@ -13,14 +13,14 @@ The app falls back to `xiaozhi_common3500_16.bin` if the compiled font is absent
 Install or locate `lv_font_conv`, then run from the repository root:
 
 ```powershell
-.\smtc_music\font\build_smtc_cjk_font.ps1 `
+.\font\build_smtc_cjk_font.ps1 `
   -ConverterPath C:\path\to\lv_font_conv.js
 ```
 
 Optional font overrides:
 
 ```powershell
-.\smtc_music\font\build_smtc_cjk_font.ps1 `
+.\font\build_smtc_cjk_font.ps1 `
   -ConverterPath C:\path\to\lv_font_conv.js `
   -ChineseFont C:\Windows\Fonts\NotoSansSC-VF.ttf `
   -JapaneseFont C:\Windows\Fonts\NotoSansSC-VF.ttf `
@@ -30,7 +30,7 @@ Optional font overrides:
 The generated file is written to:
 
 ```text
-smtc_music/package/font/smtc_cjk_16.bin
+package/font/smtc_cjk_16.bin
 ```
 
 The default build uses `--bpp 1` for crisper text on the HoloCubic dot-matrix display. Use `-Bpp 2` only if smoother grayscale text is preferred.
@@ -38,7 +38,7 @@ The default build uses `--bpp 1` for crisper text on the HoloCubic dot-matrix di
 Then redeploy:
 
 ```powershell
-cubic --host http://192.168.3.168/devtools push --force smtc_music\package /sd/apps/smtc_music
+cubic --host http://192.168.3.168/devtools push --force package /sd/apps/holocubic-smtc-music
 ```
 
 ## Coverage
