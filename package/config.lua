@@ -1,6 +1,6 @@
 local config = {}
 
-config.host = "192.168.0.80"
+config.host = "192.168.3.3"
 config.port = 17865
 config.poll_ms = 1000
 config.control_path = "/control"
