@@ -241,6 +241,7 @@ function M.new(ctx)
   end
 
   local function lyric_text_at(ms)
+    ms = ms + 1000
     local lines = APP.lyrics or {}
     if #lines == 0 then return "", "" end
     if APP.lyric_idx < 1 then APP.lyric_idx = 1 end
