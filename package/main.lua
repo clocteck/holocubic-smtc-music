@@ -3,13 +3,28 @@ if previous and previous.stop then
   pcall(function() previous.stop("reload") end)
 end
 
-local APP_DIR = "/sd/apps/smtc_music"
-if file and file.exists and not file.exists(APP_DIR .. "/config.lua") then
-  local candidates = { "smtc_music/package", "smtc_music" }
-  for _, dir in ipairs(candidates) do
-    if file.exists(dir .. "/config.lua") then APP_DIR = dir; break end
+local FALLBACK_APP_ID = "holocubic-smtc-music"
+
+local function resolve_app_dir()
+  local current = app and app.current and app.current() or nil
+  local entry = current and current.entry or nil
+  if type(entry) == "string" and entry ~= "" then
+    entry = entry:gsub("\\", "/")
+    local dir = entry:match("^(.*)/[^/]*$")
+    if dir and dir ~= "" then return dir end
   end
+
+  local fallback = "/sd/apps/" .. FALLBACK_APP_ID
+  if file and file.exists and not file.exists(fallback .. "/config.lua") then
+    local candidates = { "package", FALLBACK_APP_ID .. "/package", FALLBACK_APP_ID }
+    for _, dir in ipairs(candidates) do
+      if file.exists(dir .. "/config.lua") then return dir end
+    end
+  end
+  return fallback
 end
+
+local APP_DIR = resolve_app_dir()
 
 local config = dofile(APP_DIR .. "/config.lua")
 local ui_module = dofile(APP_DIR .. "/ui.lua")

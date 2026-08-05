@@ -14,6 +14,13 @@ function M.new(ctx)
   local JSON = ctx.json
   local text_or = ctx.text_or or default_text_or
 
+  local function app_asset_url(name)
+    local base = tostring(APP_DIR or ""):gsub("\\", "/")
+    if base:sub(1, 4) == "/sd/" then base = base:sub(4) end
+    if base:sub(1, 1) ~= "/" then base = "/apps/holocubic-smtc-music" end
+    return base .. "/" .. name
+  end
+
   local self = {
     routes = {},
     route_base = "",
@@ -207,7 +214,7 @@ label{display:grid;gap:7px;color:#334155;font-weight:700}input{width:100%;min-he
 <body>
 <main>
   <section class="hero">
-    <img class="icon" src="/sd/apps/smtc_music/main.png" alt="SMTC Music 图标">
+    <img class="icon" src="__APP_ICON_URL__" alt="SMTC Music 图标">
     <div>
       <p class="kicker">HoloCubic App WebUI</p>
       <h1>SMTC Music 设置</h1>
@@ -248,6 +255,7 @@ $("form").addEventListener("submit",save);$("reload").addEventListener("click",(
 </body>
 </html>
 ]==]
+  INDEX_HTML = INDEX_HTML:gsub("__APP_ICON_URL__", app_asset_url("main.png"), 1)
 
   local function route_index()
     return html_response(INDEX_HTML)
@@ -274,7 +282,7 @@ $("form").addEventListener("submit",save);$("reload").addEventListener("click",(
       httpd.start({ webroot = "/sd", auto_index = httpd.INDEX_NONE, max_handlers = 36 })
     end)
     local base = app and app.route_base and app.route_base() or ""
-    if base == "" then base = "/smtc_music" end
+    if base == "" then base = "/holocubic-smtc-music" end
     self.route_base = base
     self:register(httpd.GET, base, route_redirect)
     self:register(httpd.GET, base .. "/", route_index)
