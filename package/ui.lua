@@ -21,8 +21,8 @@ function M.new(ctx)
   local COVER_X, COVER_Y, COVER_SIZE = 14, 34, 88
   local LYRIC_X, LYRIC_Y, LYRIC_W = RIGHT_X, 20, 184
   local LYRIC_CENTER_Y = 92
-  local LYRIC_ACTIVE_LINE_H = 18
-  local LYRIC_SMALL_LINE_H = 14
+  local LYRIC_ACTIVE_LINE_H = 20
+  local LYRIC_SMALL_LINE_H = 20
   local LYRIC_LINE_SPACE = 4
   local LYRIC_OFFSETS = { -2, -1, 0, 1, 2 }
   local INFO_SCROLL_SPEED = 12
