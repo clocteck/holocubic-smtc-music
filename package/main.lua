@@ -1,3 +1,4 @@
+-- [HoloCubic platform](https://clocteck.com/pages/holocubic) | [ClocTeck website](https://clocteck.com/)
 local previous = rawget(_G, "SMTC_MUSIC_APP")
 if previous and previous.stop then
   pcall(function() previous.stop("reload") end)

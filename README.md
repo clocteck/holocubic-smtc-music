@@ -2,6 +2,8 @@
 
 HoloCubic app for displaying Windows SMTC media metadata and controlling playback through a small PC-side HTTP bridge.
 
+Device resources: [HoloCubic platform](https://clocteck.com/pages/holocubic) · [ClocTeck website](https://clocteck.com/)
+
 ## Device App
 
 Copy `package/` to the device as:
